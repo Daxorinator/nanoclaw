@@ -204,6 +204,38 @@ describe('Codex config TOML', () => {
       },
     ]);
   });
+
+  it('replaces config.toml before malformed hooks.json fails', () => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
+    process.env.HOME = tmpHome;
+    const codexDir = path.join(tmpHome, '.codex');
+    const configPath = path.join(codexDir, 'config.toml');
+    const hooksPath = path.join(codexDir, 'hooks.json');
+    fs.mkdirSync(codexDir, { recursive: true });
+    fs.writeFileSync(configPath, 'stale config');
+    fs.writeFileSync(hooksPath, '{');
+
+    expect(() => writeCodexConfigToml({}, MEMORY_SESSION_HOOK, { model: 'gpt-5' })).toThrow();
+    expect(fs.readFileSync(configPath, 'utf-8')).toContain('model = "gpt-5"');
+    expect(fs.readFileSync(configPath, 'utf-8')).not.toContain('stale config');
+    expect(fs.readFileSync(hooksPath, 'utf-8')).toBe('{');
+  });
+
+  it('replaces config.toml before an existing empty hooks.json fails', () => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
+    process.env.HOME = tmpHome;
+    const codexDir = path.join(tmpHome, '.codex');
+    const configPath = path.join(codexDir, 'config.toml');
+    const hooksPath = path.join(codexDir, 'hooks.json');
+    fs.mkdirSync(codexDir, { recursive: true });
+    fs.writeFileSync(configPath, 'stale config');
+    fs.writeFileSync(hooksPath, '');
+
+    expect(() => writeCodexConfigToml({}, MEMORY_SESSION_HOOK, { model: 'gpt-5' })).toThrow();
+    expect(fs.readFileSync(configPath, 'utf-8')).toContain('model = "gpt-5"');
+    expect(fs.readFileSync(configPath, 'utf-8')).not.toContain('stale config');
+    expect(fs.readFileSync(hooksPath, 'utf-8')).toBe('');
+  });
 });
 
 describe('Codex thread SessionStart source', () => {

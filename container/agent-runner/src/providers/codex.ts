@@ -11,7 +11,7 @@ import type {
   ProviderOptions,
   QueryInput,
 } from './types.js';
-import { archiveProviderExchange } from './exchange-archive.js';
+import { archiveProviderExchange as archiveProviderExchangeLegacy } from './exchange-archive.js';
 import {
   type AppServer,
   type CodexMemorySessionHook,
@@ -31,6 +31,12 @@ import {
 
 const TURN_TIMEOUT_MS = 10 * 60 * 1000;
 const SUPPORTED_EFFORTS = new Set<CodexReasoningEffort>(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+
+type CoreProviderOptions = ProviderOptions & {
+  coreIo?: {
+    realizeManagedFiles(when: 'memory-session-hook-registration' | 'before-query', context: unknown): void;
+  };
+};
 
 export interface CodexRuntimeDeps {
   writeCodexConfigToml: typeof writeCodexConfigToml;
@@ -76,11 +82,10 @@ function normalizeEffort(effort: string | undefined): CodexReasoningEffort | und
 export class CodexProvider implements AgentProvider {
   readonly supportsNativeSlashCommands = false;
   // The app-server keeps history server-side; there is no on-disk transcript,
-  // so the provider persists each exchange itself into `conversations/`
-  // (see exchange-archive.ts). The poll-loop reports exchanges through this
-  // hook and does nothing else — archiving is payload code, not runner code.
+  // so each exchange is persisted into `conversations/`. New core replaces
+  // this fallback with its declared archive executor at the factory boundary.
   onExchangeComplete(exchange: ProviderExchange): void {
-    archiveProviderExchange({
+    archiveProviderExchangeLegacy({
       provider: 'codex',
       prompt: exchange.prompt,
       result: exchange.result,
@@ -93,13 +98,16 @@ export class CodexProvider implements AgentProvider {
   private readonly model?: string;
   private readonly effort?: CodexReasoningEffort;
   private readonly runtime: CodexRuntimeDeps;
+  private readonly coreIo?: NonNullable<CoreProviderOptions['coreIo']>;
   private memorySessionHook?: CodexMemorySessionHook;
 
   constructor(options: ProviderOptions = {}, runtime: CodexRuntimeDeps = defaultCodexRuntimeDeps) {
+    const coreOptions = options as CoreProviderOptions;
     this.mcpServers = options.mcpServers ?? {};
     this.model = options.model;
     this.runtime = runtime;
     this.effort = normalizeEffort(options.effort);
+    this.coreIo = coreOptions.coreIo;
   }
 
   registerMemorySessionHook(hook: CodexMemorySessionHook): void {
@@ -143,10 +151,13 @@ export class CodexProvider implements AgentProvider {
     const self = this;
 
     async function* gen(): AsyncGenerator<ProviderEvent> {
-      self.runtime.writeCodexConfigToml(self.mcpServers, memorySessionHook, {
-        model: self.model,
-        effort: self.effort,
-      });
+      const configContext = {
+        servers: self.mcpServers,
+        memorySessionHook,
+        options: { model: self.model, effort: self.effort },
+      };
+      if (self.coreIo) self.coreIo.realizeManagedFiles('before-query', configContext);
+      else self.runtime.writeCodexConfigToml(self.mcpServers, memorySessionHook, configContext.options);
       const server = self.runtime.spawnCodexAppServer();
       activeServer = server;
       self.runtime.attachCodexAutoApproval(server);

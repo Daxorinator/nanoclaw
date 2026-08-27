@@ -20,29 +20,33 @@ import type { AgentGroup } from '../types.js';
 
 export const CODEX_PROJECT_DOC_MAX_BYTES = 32 * 1024;
 
-const MEMORY_POINTER = [
-  'The live memory index and definition are supplied by NanoClaw at session startup, clear, and after compaction.',
-  'Editable memory-system definition: `/workspace/agent/memory/system/definition.md`.',
-  'Top memory index: `/workspace/agent/memory/index.md`.',
-  'Read the definition and index, then use linked memory files and conversation archives when relevant.',
-  'Stored user preferences are binding: read any linked memory file relevant to the user or the request, and apply it without being asked.',
-  'Do not use `AGENTS.local.md` or `AGENTS.override.md` for memory.',
-].join('\n\n');
-
-const NATIVE_RUNTIME_SKILLS_POINTER = [
-  'Selected NanoClaw runtime skills are available as Codex-native skills at `/workspace/agent/.agents/skills`.',
-  'Each skill directory contains a `SKILL.md` with its trigger description plus any supporting files, and points to the read-only shared skill source under `/app/skills`.',
-  'Use skill discovery to load these skills only when their descriptions match the task. A skill whose rules must hold before the task is recognised ships an `instructions.md` instead, and those arrive inlined as `NanoClaw Skill:` sections of this document.',
-  'Skills YOU author or install yourself go in `~/.codex/skills/<name>/SKILL.md` — persistent across sessions and discovered by Codex automatically. Never write skills elsewhere: paths outside `~/.codex` and `~/.agents` are ephemeral or not discovered.',
-].join('\n\n');
+export const CODEX_PROJECT_DOC_EXTRA_SECTIONS = [
+  {
+    name: 'Memory System',
+    body: [
+      'The live memory index and definition are supplied by NanoClaw at session startup, clear, and after compaction.',
+      'Editable memory-system definition: `/workspace/agent/memory/system/definition.md`.',
+      'Top memory index: `/workspace/agent/memory/index.md`.',
+      'Read the definition and index, then use linked memory files and conversation archives when relevant.',
+      'Stored user preferences are binding: read any linked memory file relevant to the user or the request, and apply it without being asked.',
+      'Do not use `AGENTS.local.md` or `AGENTS.override.md` for memory.',
+    ].join('\n\n'),
+  },
+  {
+    name: 'Native Runtime Skills',
+    body: [
+      'Selected NanoClaw runtime skills are available as Codex-native skills at `/workspace/agent/.agents/skills`.',
+      'Each skill directory contains a `SKILL.md` with its trigger description plus any supporting files, and points to the read-only shared skill source under `/app/skills`.',
+      'Use skill discovery to load these skills only when their descriptions match the task. A skill whose rules must hold before the task is recognised ships an `instructions.md` instead, and those arrive inlined as `NanoClaw Skill:` sections of this document.',
+      'Skills YOU author or install yourself go in `~/.codex/skills/<name>/SKILL.md` — persistent across sessions and discovered by Codex automatically. Never write skills elsewhere: paths outside `~/.codex` and `~/.agents` are ephemeral or not discovered.',
+    ].join('\n\n'),
+  },
+];
 
 const CODEX_PROJECT_DOC: ProjectDocSpec = {
   fileName: 'AGENTS.md',
   baseDocPath: path.join('container', 'AGENTS.md'),
-  extraSections: [
-    { name: 'Memory System', body: MEMORY_POINTER },
-    { name: 'Native Runtime Skills', body: NATIVE_RUNTIME_SKILLS_POINTER },
-  ],
+  extraSections: CODEX_PROJECT_DOC_EXTRA_SECTIONS,
   maxBytes: CODEX_PROJECT_DOC_MAX_BYTES,
 };
 

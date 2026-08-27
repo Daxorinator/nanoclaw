@@ -385,7 +385,23 @@ export function writeCodexConfigToml(
   fs.mkdirSync(codexConfigDir, { recursive: true });
   const configTomlPath = path.join(codexConfigDir, 'config.toml');
   const hooksJsonPath = path.join(codexConfigDir, 'hooks.json');
+  fs.writeFileSync(configTomlPath, renderCodexConfigToml(servers, opts));
+  const hooksExist = fs.existsSync(hooksJsonPath);
+  fs.writeFileSync(
+    hooksJsonPath,
+    reconcileCodexHooksJson(
+      hooksExist ? fs.readFileSync(hooksJsonPath, 'utf-8') : '',
+      memorySessionHook,
+      hooksJsonPath,
+      hooksExist,
+    ),
+  );
+}
 
+export function renderCodexConfigToml(
+  servers: Record<string, McpServerConfig>,
+  opts: { model?: string; effort?: string } = {},
+): string {
   // Instance-level defaults the app-server reads on startup; threads/turns inherit them.
   const lines: string[] = [
     `sandbox_mode = ${tomlBasicString(CODEX_SANDBOX_MODE)}`,
@@ -441,8 +457,18 @@ export function writeCodexConfigToml(
     lines.push('');
   }
 
-  fs.writeFileSync(configTomlPath, lines.join('\n'));
-  const hooksConfig = readHooksConfig(hooksJsonPath);
+  return lines.join('\n');
+}
+
+export function reconcileCodexHooksJson(
+  current: string,
+  memorySessionHook: CodexMemorySessionHook,
+  filePath = 'Codex hooks config',
+  exists = Boolean(current),
+): string {
+  const parsed: unknown = exists ? JSON.parse(current) : {};
+  if (!isRecord(parsed)) throw new Error(`${filePath} must contain a JSON object`);
+  const hooksConfig = parsed;
   const hooks = objectProperty(hooksConfig, 'hooks');
   const sessionStart = arrayProperty(hooks, 'SessionStart');
 
@@ -455,16 +481,7 @@ export function writeCodexConfigToml(
     hooks: [{ type: 'command', command: memorySessionHook.command, timeout: 10 }],
   });
   hooks.SessionStart = nextSessionStart;
-  fs.writeFileSync(hooksJsonPath, JSON.stringify(hooksConfig, null, 2) + '\n');
-}
-
-function readHooksConfig(filePath: string): Record<string, unknown> {
-  if (!fs.existsSync(filePath)) return {};
-  const parsed: unknown = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  if (!isRecord(parsed)) {
-    throw new Error(`${filePath} must contain a JSON object`);
-  }
-  return parsed;
+  return JSON.stringify(hooksConfig, null, 2) + '\n';
 }
 
 function objectProperty(parent: Record<string, unknown>, key: string): Record<string, unknown> {

@@ -44,6 +44,10 @@ export interface ReplyContext {
   sender: string;
 }
 
+/** Cap on url-fallback attachment downloads (fetchData()-less adapters), to
+ *  bound memory use from a platform-reported size we don't otherwise trust. */
+const MAX_FETCHED_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Agent-DM opened hook (assistant_thread_started)
 // ---------------------------------------------------------------------------
@@ -471,6 +475,22 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           } catch (err) {
             log.warn('Failed to download attachment', { type: att.type, err });
           }
+        } else if (att.url && (!att.size || att.size <= MAX_FETCHED_ATTACHMENT_BYTES)) {
+          // Some adapters (e.g. Discord) expose only a CDN url, not fetchData().
+          try {
+            const res = await fetch(att.url);
+            if (res.ok) {
+              const buffer = Buffer.from(await res.arrayBuffer());
+              entry.data = buffer.toString('base64');
+            } else {
+              entry.url = att.url;
+            }
+          } catch (err) {
+            log.warn('Failed to download attachment from url', { type: att.type, err });
+            entry.url = att.url;
+          }
+        } else if (att.url) {
+          entry.url = att.url;
         }
         enriched.push(entry);
       }

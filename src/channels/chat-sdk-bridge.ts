@@ -18,6 +18,7 @@ import {
   type ConcurrencyStrategy,
   type Message as ChatMessage,
 } from 'chat';
+import { decodeDiscordCustomId } from '@chat-adapter/discord';
 import { log } from '../log.js';
 import { SqliteStateAdapter } from '../state-sqlite.js';
 import { registerWebhookAdapter } from '../webhook-server.js';
@@ -695,7 +696,14 @@ async function handleForwardedEvent(
     const interaction = event.data;
     // type 3 = MessageComponent (button/select)
     if (interaction.type === 3) {
-      const customId = (interaction.data as Record<string, unknown>)?.custom_id as string;
+      // The adapter encodes button id/value as `${id}\n${value}` (see
+      // encodeDiscordCustomId in @chat-adapter/discord). Our buttons set both
+      // id and value to the option index, so the raw custom_id here is
+      // `ncq:<questionId>:<idx>\n<idx>` — decode off the adapter's own helper
+      // to strip the trailing `\n<value>` before parsing the ncq: prefix,
+      // rather than hand-rolling a second, inconsistent parse of its encoding.
+      const rawCustomId = (interaction.data as Record<string, unknown>)?.custom_id as string | undefined;
+      const customId = rawCustomId ? decodeDiscordCustomId(rawCustomId).actionId : undefined;
       // In guilds the clicker is at interaction.member.user; in DMs it's interaction.user directly.
       const user =
         ((interaction.member as Record<string, unknown>)?.user as Record<string, string> | undefined) ??

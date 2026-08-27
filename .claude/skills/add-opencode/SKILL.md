@@ -1,128 +1,82 @@
 ---
 name: add-opencode
-description: Use OpenCode as an agent provider (AGENT_PROVIDER=opencode). OpenRouter, OpenAI, Google, DeepSeek, etc. via OpenCode config — not the Anthropic Agent SDK. Per-session and per-group via agent_provider; host passes OPENCODE_* and XDG mount when spawning containers.
+description: Use OpenCode as an agent provider. OpenRouter, OpenAI, Google, DeepSeek, etc. via OpenCode config — not the Anthropic Agent SDK. Per-group via `ncl groups config update --provider opencode`; host passes OPENCODE_* and XDG state when spawning containers.
+metadata:
+  nanoclaw-provider: opencode
+  nanoclaw-provider-label: OpenCode
+  nanoclaw-provider-hint: Open-source provider router
+  nanoclaw-provider-offered: 'false'
+  nanoclaw-provider-install-skill: add-opencode
+  nanoclaw-provider-image: local-required
 ---
 
 # OpenCode agent provider
 
-NanoClaw runs agents in a long-lived **poll loop** inside the container. The backend is selected with **`AGENT_PROVIDER`** (`claude` | `opencode` | `mock`).
+NanoClaw runs agents in a long-lived **poll loop** inside the container. Each group's backend is selected by `container_configs.provider` (default `claude`).
 
 Trunk ships with only the `claude` provider baked in. This skill copies the OpenCode provider files in from the `providers` branch, wires them into the host and container barrels, installs dependencies, and rebuilds the image.
 
 ## Install
 
-### Pre-flight
+The payload, declarations, dependencies, and barrels are deterministic and idempotent.
 
-If all of the following are already present, skip to **Configuration**:
-
-- `src/providers/opencode.ts`
-- `container/agent-runner/src/providers/opencode.ts`
-- `import './opencode.js';` line in `src/providers/index.ts`
-- `import './opencode.js';` line in `container/agent-runner/src/providers/index.ts`
-- `@opencode-ai/sdk` in `container/agent-runner/package.json`
-- `opencode-ai@${OPENCODE_VERSION}` in the pnpm global-install block in `container/Dockerfile`
-
-Missing pieces — continue below. All steps are idempotent; re-running is safe.
-
-### 1. Fetch the providers branch
-
-```bash
-git fetch origin providers
+```nc:copy from-branch:providers
+src/providers/opencode.ts
+src/providers/opencode-registration.test.ts
+src/provider-contracts/opencode.ts
+container/agent-runner/src/providers/opencode.ts
+container/agent-runner/src/providers/mcp-to-opencode.ts
+container/agent-runner/src/providers/mcp-to-opencode.test.ts
+container/agent-runner/src/providers/opencode-registration.test.ts
+container/agent-runner/src/providers/opencode.factory.test.ts
+container/agent-runner/src/providers/opencode.attachments.test.ts
+container/agent-runner/src/providers/opencode.compaction.test.ts
+container/agent-runner/src/providers/opencode.config.test.ts
+container/agent-runner/src/providers/opencode.empty-resume.test.ts
+container/agent-runner/src/providers/opencode.memory.test.ts
+container/agent-runner/src/providers/opencode.question.test.ts
+container/agent-runner/src/provider-contracts/opencode.ts
+setup/provider-contracts/opencode.ts
 ```
 
-### 2. Copy the OpenCode source files
-
-Wholesale copies (owned entirely by this skill — user edits to these files won't survive a re-run, as designed):
-
-```bash
-git show origin/providers:src/providers/opencode.ts                                    > src/providers/opencode.ts
-git show origin/providers:container/agent-runner/src/providers/opencode.ts             > container/agent-runner/src/providers/opencode.ts
-git show origin/providers:container/agent-runner/src/providers/mcp-to-opencode.ts      > container/agent-runner/src/providers/mcp-to-opencode.ts
-git show origin/providers:container/agent-runner/src/providers/mcp-to-opencode.test.ts > container/agent-runner/src/providers/mcp-to-opencode.test.ts
-git show origin/providers:container/agent-runner/src/providers/opencode.factory.test.ts > container/agent-runner/src/providers/opencode.factory.test.ts
-git show origin/providers:container/agent-runner/src/providers/opencode.attachments.test.ts > container/agent-runner/src/providers/opencode.attachments.test.ts
-git show origin/providers:container/agent-runner/src/providers/opencode.compaction.test.ts > container/agent-runner/src/providers/opencode.compaction.test.ts
-git show origin/providers:container/agent-runner/src/providers/opencode.config.test.ts > container/agent-runner/src/providers/opencode.config.test.ts
-git show origin/providers:container/agent-runner/src/providers/opencode.memory.test.ts > container/agent-runner/src/providers/opencode.memory.test.ts
-git show origin/providers:container/agent-runner/src/providers/opencode.question.test.ts > container/agent-runner/src/providers/opencode.question.test.ts
-git show origin/providers:container/agent-runner/src/providers/cwd-shim.ts             > container/agent-runner/src/providers/cwd-shim.ts.new && mv container/agent-runner/src/providers/cwd-shim.ts.new container/agent-runner/src/providers/cwd-shim.ts
-git show origin/providers:container/agent-runner/src/providers/cwd-shim.test.ts        > container/agent-runner/src/providers/cwd-shim.test.ts.new && mv container/agent-runner/src/providers/cwd-shim.test.ts.new container/agent-runner/src/providers/cwd-shim.test.ts
-```
-
-(`cwd-shim.ts` is byte-identical to the trunk copy on current trunks — `mcp-to-opencode.ts` imports it, so copying it keeps the payload self-sufficient on trunks that predate it. These two overwrite real trunk files, so they go through a `.new` + `mv` guard: on a providers branch that predates the cwd payload, `git show` fails without truncating the live copy the default provider imports.)
-
-### 3. Append the self-registration imports
-
-Each barrel gets one line appended at the end — skip if the line is already present.
-
-`src/providers/index.ts`:
-
-```typescript
+```nc:append to:src/providers/index.ts
 import './opencode.js';
 ```
 
-`container/agent-runner/src/providers/index.ts`:
-
-```typescript
+```nc:append to:src/provider-contracts/index.ts
 import './opencode.js';
 ```
 
-### 4. Add the agent-runner dependency
-
-Pinned. Bump deliberately, not with `bun update`. Use `1.4.17` — must match the `opencode-ai` CLI version pinned in step 5. The 1.14.x SDK has a completely different API and is **incompatible** with the current provider code.
-
-```bash
-cd container/agent-runner && bun add @opencode-ai/sdk@1.4.17 && cd -
+```nc:append to:container/agent-runner/src/providers/index.ts
+import './opencode.js';
 ```
 
-### 5. Add `opencode-ai` to the container Dockerfile
-
-Two edits to `container/Dockerfile`, both idempotent (skip if already present):
-
-**(a)** In the "Pin CLI versions" ARG block (around line 18), add after `ARG VERCEL_VERSION=latest`:
-
-```dockerfile
-ARG OPENCODE_VERSION=1.4.17
+```nc:append to:container/agent-runner/src/provider-contracts/index.ts
+import './opencode.js';
 ```
 
-> **Do not use `latest`** — the CLI and SDK must be the same version. `latest` silently upgrades the CLI to 1.14.x which has a breaking session API change (UUID session IDs → `ses_` prefix) incompatible with SDK 1.4.x.
-
-**(b)** In the `pnpm install -g` block (around line 80), append `"opencode-ai@${OPENCODE_VERSION}"` to the list:
-
-```dockerfile
-    pnpm install -g \
-        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-        "agent-browser@${AGENT_BROWSER_VERSION}" \
-        "vercel@${VERCEL_VERSION}" \
-        "opencode-ai@${OPENCODE_VERSION}"
+```nc:append to:setup/provider-contracts/index.ts
+import './opencode.js';
 ```
 
-### 6. Build
+The SDK and CLI pins must match; 1.14.x has a different session API.
 
-```bash
-pnpm run build                                         # host
-pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit   # container typecheck
-./container/build.sh                                   # agent image
+```nc:dep manager:bun cwd:container/agent-runner
+@opencode-ai/sdk@1.4.17
 ```
 
-> **Build cache gotcha:** The container buildkit caches COPY steps aggressively. If provider files were already present in the build context before, the new files may not be picked up. If you see "Unknown provider: opencode" after the build, prune the builder and rebuild:
-> ```bash
-> docker builder prune -f && ./container/build.sh
-> ```
+```nc:json-merge into:container/cli-tools.json key:name
+{ "name": "opencode-ai", "version": "1.4.17" }
+```
 
-### 7. Propagate to existing per-group overlays
+```nc:run effect:build
+pnpm run build
+pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit
+./container/build.sh
+```
 
-Each agent group has a live source overlay at `data/v2-sessions/<group-id>/agent-runner-src/providers/` that **overrides the image at runtime**. This overlay is created when the group is first wired and never auto-updated by image rebuilds. Any group that already existed before this skill ran needs the new files copied in manually.
-
-```bash
-for overlay in data/v2-sessions/*/agent-runner-src/providers/; do
-  [ -d "$overlay" ] || continue
-  cp container/agent-runner/src/providers/opencode.ts "$overlay"
-  cp container/agent-runner/src/providers/mcp-to-opencode.ts "$overlay"
-  cp container/agent-runner/src/providers/cwd-shim.ts "$overlay"
-  cp container/agent-runner/src/providers/index.ts "$overlay"
-  echo "Updated: $overlay"
-done
+```nc:run effect:test
+pnpm exec tsx scripts/provider-contract-verifier.ts
 ```
 
 ## Configuration
@@ -131,7 +85,7 @@ done
 
 Set model/provider strings in the form OpenCode expects (often `provider/model-id`). **Put comments on their own lines** — a `#` inside a value is kept verbatim and breaks model IDs.
 
-These variables are read **on the host** and passed into the container only when the effective provider is `opencode`. They do not switch the provider by themselves; the DB still needs `agent_provider` set (below).
+These variables are read **on the host** and passed into the container only when the effective provider is `opencode`. They do not switch the provider by themselves.
 
 - `OPENCODE_PROVIDER` — OpenCode provider id, e.g. `openrouter`, `anthropic`, `deepseek`.
 - `OPENCODE_MODEL` — full model id in `provider/model` form, e.g. `deepseek/deepseek-chat`.
@@ -200,7 +154,7 @@ OPENCODE_SMALL_MODEL=anthropic/claude-haiku-4-5-20251001
 
 Zen's HTTP API (e.g. `POST …/zen/v1/messages`) expects the key in the **`x-api-key`** header. If OneCLI injects **`Authorization: Bearer …`** only, Zen often returns **401 / "Missing API key"** even though the gateway is working.
 
-**Naming:** NanoClaw **`AGENT_PROVIDER=opencode`** (DB `agent_provider`) means "run the **OpenCode agent provider**." Separately, **`OPENCODE_PROVIDER=opencode`** in `.env` is OpenCode's **Zen provider id** inside the OpenCode config (see [Zen docs](https://opencode.ai/docs/zen/)).
+**Naming:** NanoClaw's group config `provider=opencode` means "run the **OpenCode agent provider**." Separately, **`OPENCODE_PROVIDER=opencode`** in `.env` is OpenCode's **Zen provider id** inside the OpenCode config (see [Zen docs](https://opencode.ai/docs/zen/)).
 
 **Host `.env` (typical Zen shape):**
 
@@ -221,9 +175,14 @@ onecli secrets create --name "OpenCode Zen" --type generic \
   --header-name "x-api-key" --value-format "{value}"
 ```
 
-### Per group / per session
+### Per group
 
-Set `"provider": "opencode"` in the group's **`container.json`** (`groups/<folder>/container.json`) — the in-container runner reads `provider` from there, not from the DB. The DB columns **`agent_groups.agent_provider`** and **`sessions.agent_provider`** (session overrides group) only drive host-side provider contribution — per-session XDG mount, `OPENCODE_*` env passthrough — and do not propagate into `container.json` at spawn time. Set both, or just edit `container.json`; if they disagree, the runner uses `container.json` and the host-side resolver falls back through session → group → `container.json` → `'claude'`.
+```bash
+ncl groups config update --id <group-id> --provider opencode
+ncl groups restart --id <group-id>
+```
+
+The host materializes this DB-backed configuration for the container at spawn time.
 
 Extra MCP servers still come from **`NANOCLAW_MCP_SERVERS`** / `container_config.mcpServers` on the host; the runner merges them into the same `mcpServers` object passed to **both** Claude and OpenCode providers.
 

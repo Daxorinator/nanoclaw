@@ -45,6 +45,10 @@ export interface ReplyContext {
   sender: string;
 }
 
+/** Cap on url-fallback attachment downloads (fetchData()-less adapters), to
+ *  bound memory use from a platform-reported size we don't otherwise trust. */
+const MAX_FETCHED_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Agent-DM opened hook (assistant_thread_started)
 // ---------------------------------------------------------------------------
@@ -462,6 +466,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           name: att.name,
           mimeType: att.mimeType,
           size: att.size,
+          url: att.url,
           width: (att as unknown as Record<string, unknown>).width,
           height: (att as unknown as Record<string, unknown>).height,
         };
@@ -471,6 +476,20 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
             entry.data = buffer.toString('base64');
           } catch (err) {
             log.warn('Failed to download attachment', { type: att.type, err });
+          }
+        } else if (att.url && (!att.size || att.size <= MAX_FETCHED_ATTACHMENT_BYTES)) {
+          // Some adapters (e.g. Discord) never implement fetchData — they only
+          // hand back a directly-fetchable CDN url. Agent containers have no
+          // open egress (see egress-lockdown.ts), so the host must download the
+          // bytes now, while the url is still fresh, rather than leaving it for
+          // the agent to fetch itself.
+          try {
+            const res = await fetch(att.url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const buffer = Buffer.from(await res.arrayBuffer());
+            entry.data = buffer.toString('base64');
+          } catch (err) {
+            log.warn('Failed to download attachment via url', { type: att.type, url: att.url, err });
           }
         }
         enriched.push(entry);

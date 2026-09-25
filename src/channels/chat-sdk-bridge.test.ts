@@ -95,6 +95,22 @@ describe('createChatSdkBridge', () => {
     });
     expect(typeof bridge.subscribe).toBe('function');
   });
+
+  it('reports an adapter transport probe when one is available', () => {
+    let connected = false;
+    const adapter = stubAdapter({}) as Adapter & { isConnected(): boolean };
+    adapter.isConnected = () => connected;
+    const bridge = createChatSdkBridge({ adapter, supportsThreads: true });
+
+    expect(bridge.isConnected()).toBe(false);
+    connected = true;
+    expect(bridge.isConnected()).toBe(true);
+  });
+
+  it('keeps adapters without a transport probe available after setup', () => {
+    const bridge = createChatSdkBridge({ adapter: stubAdapter({}), supportsThreads: true });
+    expect(bridge.isConnected()).toBe(true);
+  });
 });
 
 describe('createChatSdkBridge — instance identity', () => {
@@ -459,6 +475,60 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
     expect(buttons[0].url).toBe('https://example.com');
   });
 
+  it('survives a null action instead of throwing on a property read', async () => {
+    const { calls, postMessage } = makePostCapture();
+    const bridge = createChatSdkBridge({
+      adapter: stubAdapter({ postMessage }),
+      supportsThreads: false,
+    });
+    await bridge.deliver('discord:guild:chan', null, {
+      kind: 'chat-sdk',
+      content: {
+        type: 'card',
+        card: {
+          title: 'Docs',
+          actions: [null, { label: 'Open', url: 'https://example.com' }],
+        },
+      },
+    });
+    const msg = calls[0].message as {
+      card?: { children?: Array<{ type?: string; children?: Array<{ type?: string; url?: string }> }> };
+    };
+    const buttons = msg.card?.children?.find((c) => c.type === 'actions')?.children ?? [];
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].url).toBe('https://example.com');
+  });
+
+  it('renders an unknown style as the default button style rather than dropping the action', async () => {
+    const { calls, postMessage } = makePostCapture();
+    const bridge = createChatSdkBridge({
+      adapter: stubAdapter({ postMessage }),
+      supportsThreads: false,
+    });
+    await bridge.deliver('discord:guild:chan', null, {
+      kind: 'chat-sdk',
+      content: {
+        type: 'card',
+        card: {
+          title: 'Docs',
+          actions: [
+            { label: 'Open', url: 'https://example.com', style: 'chartreuse' },
+            { label: 'Also', url: 'https://example.org', style: null },
+          ],
+        },
+      },
+    });
+    const msg = calls[0].message as {
+      card?: {
+        children?: Array<{ type?: string; children?: Array<{ type?: string; url?: string; style?: string }> }>;
+      };
+    };
+    const buttons = msg.card?.children?.find((c) => c.type === 'actions')?.children ?? [];
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0].style).toBeUndefined();
+    expect(buttons[1].style).toBeUndefined();
+  });
+
   it('skips delivery when the card has neither title nor body content', async () => {
     const { calls, postMessage } = makePostCapture();
     const bridge = createChatSdkBridge({
@@ -487,4 +557,103 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
     const msg = calls[0].message as { markdown?: string };
     expect(msg.markdown).toBe('plain hello');
   });
+});
+
+it('uses a registered approval presentation losslessly for initial and terminal cards', async () => {
+  const { registerQuestionRenderResolver } = await import('./question-render-registry.js');
+  const evidence = 'full evidence\n'.repeat(500);
+  registerQuestionRenderResolver((id) =>
+    id === 'presentation-fixture'
+      ? {
+          title: 'Review',
+          options: [],
+          deferResolution: true,
+          renderMessage: () => ({ markdown: evidence }),
+          renderTerminal: (resolution) => ({ markdown: `${evidence}\n${resolution}` }),
+        }
+      : undefined,
+  );
+  const { calls, postMessage } = makePostCapture();
+  const edits: PostCall[] = [];
+  const bridge = createChatSdkBridge({
+    adapter: stubAdapter({
+      postMessage,
+      editMessage: async (threadId, _id, message) => {
+        edits.push({ threadId, message });
+        return { id: 'card', threadId, raw: {} };
+      },
+    }),
+    supportsThreads: false,
+  });
+  await bridge.deliver('stub:C1', null, {
+    kind: 'chat-sdk',
+    content: {
+      type: 'ask_question',
+      questionId: 'presentation-fixture',
+      title: 'Review',
+      options: [],
+      requirePresentation: true,
+    },
+  });
+  expect(calls[0].message).toEqual({ markdown: evidence });
+  await bridge.deliver('stub:C1', null, {
+    kind: 'chat-sdk',
+    content: {
+      operation: 'edit',
+      questionId: 'presentation-fixture',
+      messageId: 'card',
+      terminalCard: { resolution: 'Rejected' },
+    },
+  });
+  expect(edits[0].message).toEqual({ markdown: `${evidence}\nRejected` });
+});
+
+it('forwards the authenticated instance and message address without editing a deferred approval', async () => {
+  const { initTestDb, closeDb } = await import('../db/connection.js');
+  const { runMigrations } = await import('../db/migrations/index.js');
+  const { registerQuestionRenderResolver } = await import('./question-render-registry.js');
+  await runMigrations(await initTestDb());
+  registerQuestionRenderResolver((id) =>
+    id === 'address-fixture'
+      ? {
+          title: 'Review',
+          options: [{ label: 'Approve', selectedLabel: 'Approved', value: 'approve' }],
+          deferResolution: true,
+        }
+      : undefined,
+  );
+  const editMessage = vi.fn();
+  const adapter = stubAdapter({
+    name: 'fixture',
+    initialize: async () => {},
+    channelIdFromThreadId: (threadId: string) => threadId,
+    editMessage,
+  });
+  const bridge = createChatSdkBridge({ adapter, instance: 'fixture-one', supportsThreads: false });
+  const onAction = vi.fn();
+  try {
+    await bridge.setup({ onInbound: () => {}, onInboundEvent: () => {}, onMetadata: () => {}, onAction });
+    const chat = (bridge as unknown as { _chat: import('chat').Chat })._chat;
+    await chat.processAction(
+      {
+        actionId: 'ncq:address-fixture:0',
+        adapter,
+        messageId: 'original-card',
+        raw: {},
+        threadId: 'fixture:room',
+        user: { userId: 'selected' } as never,
+        value: '0',
+      },
+      undefined,
+    );
+    expect(onAction).toHaveBeenCalledWith('address-fixture', 'approve', 'selected', {
+      instance: 'fixture-one',
+      messageId: 'original-card',
+      platformId: 'fixture:room',
+    });
+    expect(editMessage).not.toHaveBeenCalled();
+  } finally {
+    await bridge.teardown();
+    await closeDb();
+  }
 });

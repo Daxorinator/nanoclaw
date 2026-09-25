@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { unwrapForwardedSnapshot } from './discord.js';
+import { discordSafeLinkText, unwrapForwardedSnapshot } from './discord.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function forwardPayload(snapshotMessage: Record<string, any> | null, overrides: Record<string, any> = {}) {
@@ -72,5 +72,27 @@ describe('unwrapForwardedSnapshot', () => {
     });
     unwrapForwardedSnapshot(data);
     expect(data.content).toBe('[Forwarded message]\none\ntwo');
+  });
+});
+
+describe('discordSafeLinkText', () => {
+  it('renders a bare url when the link text is just the url', () => {
+    expect(discordSafeLinkText('https://example.com/x', 'https://example.com/x')).toBe('https://example.com/x');
+  });
+
+  it('renders a bare url when the link text is empty or whitespace', () => {
+    expect(discordSafeLinkText('', 'https://example.com')).toBe('https://example.com');
+    expect(discordSafeLinkText('   ', 'https://example.com')).toBe('https://example.com');
+  });
+
+  it('keeps a descriptive label alongside a bare, autolinkable url', () => {
+    expect(discordSafeLinkText('Elba 50M product page', 'https://gnltd.co.uk/elba-50m')).toBe(
+      'Elba 50M product page: https://gnltd.co.uk/elba-50m',
+    );
+  });
+
+  it('never emits CommonMark masked-link syntax', () => {
+    const result = discordSafeLinkText('click here', 'https://example.com');
+    expect(result).not.toMatch(/\[.*\]\(.*\)/);
   });
 });

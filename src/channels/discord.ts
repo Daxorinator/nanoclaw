@@ -3,6 +3,7 @@
  * Self-registers on import.
  */
 import { createDiscordAdapter } from '@chat-adapter/discord';
+import { getNodeChildren, isLinkNode, type Content } from 'chat';
 
 import { readEnvFile } from '../env.js';
 import type { ChannelDefaults } from './adapter.js';
@@ -72,6 +73,37 @@ function unwrapForwards(adapter: ReturnType<typeof createDiscordAdapter>): void 
   };
 }
 
+/**
+ * Discord's plain message content (unlike Slack's mrkdwn) never renders
+ * `[text](url)` as a clickable link — that masked-link syntax only works
+ * inside embeds. @chat-adapter/discord's markdown converter emits it
+ * unconditionally, so every link we send shows up as literal bracket text.
+ * Render a bare, autolinkable URL instead — Discord autolinks plain URLs
+ * (trimming a trailing unmatched ")") without any special markup needed.
+ */
+export function discordSafeLinkText(linkText: string, url: string): string {
+  const trimmed = linkText.trim();
+  if (!trimmed || trimmed === url) return url;
+  return `${trimmed}: ${url}`;
+}
+
+function patchLinkRendering(adapter: ReturnType<typeof createDiscordAdapter>): void {
+  const a = adapter as unknown as {
+    formatConverter: { nodeToDiscordMarkdown: (node: Content) => string };
+  };
+  const converter = a.formatConverter;
+  const orig = converter.nodeToDiscordMarkdown.bind(converter);
+  converter.nodeToDiscordMarkdown = (node: Content): string => {
+    if (isLinkNode(node)) {
+      const linkText = getNodeChildren(node)
+        .map((child) => converter.nodeToDiscordMarkdown(child))
+        .join('');
+      return discordSafeLinkText(linkText, node.url);
+    }
+    return orig(node);
+  };
+}
+
 registerChannelAdapter('discord', {
   factory: () => {
     const env = readEnvFile(['DISCORD_BOT_TOKEN', 'DISCORD_PUBLIC_KEY', 'DISCORD_APPLICATION_ID']);
@@ -82,6 +114,7 @@ registerChannelAdapter('discord', {
       applicationId: env.DISCORD_APPLICATION_ID,
     });
     unwrapForwards(discordAdapter);
+    patchLinkRendering(discordAdapter);
     return createChatSdkBridge({
       adapter: discordAdapter,
       concurrency: 'concurrent',
